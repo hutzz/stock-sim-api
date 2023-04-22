@@ -1,0 +1,6 @@
+Flask==2.2.2
+flask_sqlalchemy==3.0.3
+PyJWT==2.6.0
+python-dotenv==1.0.0
+Werkzeug==2.2.2
+yfinance==0.2.3
