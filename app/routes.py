@@ -122,7 +122,7 @@ def login():
     try:
         auth = request.authorization
         if not auth or not auth.username or not auth.password:
-            return make_response(jsonify('Invalid or missing credentials.'), 401)
+            return jsonify({'message': 'Invalid or missing credentials.'}), 401
         user = User.query.filter_by(username=auth.username).first()
         if not user:
             return make_response(jsonify('User not found.'), 404)
@@ -133,18 +133,18 @@ def login():
     except Exception as e:
         print(e)
         return jsonify({'message': "An error occurred."}), 500
-    return make_response(jsonify('Invalid or missing credentials.'), 401)
+    return jsonify({'message': 'Invalid or missing credentials.'}), 401
 
 @app.route('/register', methods=['POST'])
 def register():
     try:
         data = request.get_json()
-        if not re.search(r".+@.+\..+", data['email']) or re.search(r"[%\\\?\"\'~/\$\*\{\}]", data['email']) or len(data['email']) > 128 or not data['email'].isascii():
-            return jsonify({'message': 'Invalid email.'})
-        if not data['username'] or re.search(r"[%\\\?\"\'~/\$\*\{\}]", data['username']) or len(data['username']) > 32 or not data['username'].isascii():
-            return jsonify({'message': 'Invalid username.'}) 
-        if not data['password'] or re.search(r"[%\\\?\"\'~/\$\*\{\}]", data['password']) or len(data["password"]) < 8 or len(data['password']) > 256 or not data['password'].isascii():
-            return jsonify({'message': 'Invalid password.'})
+        if not re.search(r".+@.+\..+", data['email']) or re.search(r"[%\\\?\"\'~/\$\*\{\}\s]", data['email']) or len(data['email']) > 128 or not data['email'].isascii():
+            return jsonify({'message': 'Invalid email. Check for any special characters that may be present, and ensure that the entered email address is formatted correctly.'}), 401
+        if not data['username'] or re.search(r"[%\\\?\"\'~/\$\*\{\}\s]", data['username']) or len(data['username']) > 32 or not data['username'].isascii():
+            return jsonify({'message': 'Invalid username. Check for any special characters that may be present.'}), 401
+        if not data['password'] or re.search(r"[%\\\?\"\'~/\$\*\{\}\s]", data['password']) or len(data["password"]) < 8 or len(data['password']) > 256 or not data['password'].isascii():
+            return jsonify({'message': 'Invalid password. Check for any special characters that may be present.'}), 401
         hashed_pw = generate_password_hash(data['password'], method='sha256')
         user = User(public_id=str(uuid.uuid4()), username=data['username'], email=data['email'], password=hashed_pw, balance=10000.00, admin=False)
         db.session.add(user)
@@ -163,13 +163,13 @@ def refresh_token(current_user):
     try:
         refresh_token = request.headers['x-refresh-token']
         if not refresh_token:
-            return make_response(jsonify({'message': 'Missing refresh token.'}), 401)
+            return jsonify({'message': 'Missing refresh token.'}), 401
         try:
             jwt.decode(refresh_token, app.config['SECRET_KEY'], algorithms=['HS256'])
         except:
-            return make_response(jsonify({'message': 'Invalid refresh token.'}), 401)
+            return jsonify({'message': 'Invalid refresh token.'}), 401
         if not current_user:
-            return make_response(jsonify({'message': 'User not found.'}), 404)
+            return jsonify({'message': 'User not found.'}), 404
         return jsonify({'token': jwt.encode({'public_id': current_user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=15)}, app.config['SECRET_KEY'], algorithm='HS256'), 'refresh': jwt.encode({'public_id': current_user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=15)}, app.config['SECRET_KEY'], algorithm='HS256')})
     except Exception as e:
         print(e)
@@ -250,7 +250,7 @@ def sell_stock(current_user, symbol, quantity):
         if not stock:
             return jsonify({'message': 'Stock not found!'}), 404
         if stock.quantity < quantity:
-            return jsonify({'message': f'You have less than {quantity} of that stock!'})
+            return jsonify({'message': f'You have less than {quantity} of that stock!'}), 400
         stock.quantity -= quantity 
         if stock.quantity == 0: 
             db.session.delete(stock)
