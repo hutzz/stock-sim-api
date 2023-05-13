@@ -1,5 +1,5 @@
 from index import app, db
-from flask import request, jsonify, make_response
+from flask import request, jsonify
 from app.models import User, Stock
 from app.prices import get_hist_data
 import yfinance as yf
@@ -125,7 +125,7 @@ def login():
             return jsonify({'message': 'Invalid or missing credentials.'}), 401
         user = User.query.filter_by(username=auth.username).first()
         if not user:
-            return make_response(jsonify('User not found.'), 404)
+            return jsonify({'message': 'User not found.'}), 404
         if check_password_hash(user.password, auth.password):
             token = jwt.encode({'public_id': user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=15)}, app.config['SECRET_KEY'], algorithm='HS256')
             refresh = jwt.encode({'public_id': user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=15)}, app.config['SECRET_KEY'], algorithm='HS256')
