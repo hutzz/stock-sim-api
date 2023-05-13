@@ -73,7 +73,7 @@ def get_user(current_user, public_id):
             return jsonify({'message': "Insufficient permissions."}), 401
         user = User.query.filter_by(public_id=public_id).first()
         if not user:
-            return jsonify({'message': 'User not found.'})
+            return jsonify({'message': 'User not found.'}), 404
         data = {}
         data['public_id'] = user.public_id
         data['username'] = user.username 
@@ -109,7 +109,7 @@ def delete_user(current_user, public_id):
             return jsonify({'message': "Insufficient permissions."}), 401
         user = User.query.filter_by(public_id=public_id).first()
         if not user:
-            return jsonify({'message': 'User not found.'})
+            return jsonify({'message': 'User not found.'}), 404
         db.session.delete(user)
         db.session.commit()
         return jsonify({'message': 'User deleted.'})
