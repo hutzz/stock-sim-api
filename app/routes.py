@@ -85,6 +85,16 @@ def get_user(current_user, public_id):
     except Exception as e:
         print(e)
         return jsonify({'message': "An error occurred."}), 500
+    
+@app.route('/me')
+@require_token
+def get_current_user(current_user):
+    data = {}
+    data['public_id'] = current_user.public_id
+    data['username'] = current_user.username 
+    data['balance'] = current_user.balance
+    data['admin'] = current_user.admin
+    return jsonify(data) 
 
 @app.route('/user', methods=['POST'])
 @require_token
