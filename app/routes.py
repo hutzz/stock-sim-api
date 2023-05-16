@@ -55,6 +55,7 @@ def get_users(current_user):
         for user in users:
             data = {}
             data['public_id'] = user.public_id
+            data['email'] = user.email
             data['username'] = user.username
             data['password'] = user.password
             data['balance'] = user.balance
@@ -210,19 +211,19 @@ def get_user_stocks(current_user):
         print(e)
         return jsonify({'message': "An error occurred."}), 500
 
-@app.route('/stock/add/<symbol>', methods=['POST'])
+@app.route('/stock/buy', methods=['POST'])
 @require_token
-def add_stock(current_user, symbol):
+def buy_stock(current_user):
     data = request.get_json()
     try:
-        ticker = yf.Ticker(symbol.upper())
+        ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
         return jsonify({'message': 'Invalid input.'}), 403
     try:
         data['quantity'] = int(data['quantity'])
-        stock = Stock(user_id=User.query.filter_by(public_id=current_user.public_id).first().id, symbol=symbol.upper(), price_at_purchase=current_price, quantity=data['quantity'])
-        current_stock = Stock.query.filter_by(symbol=symbol.upper()).first()
+        stock = Stock(user_id=User.query.filter_by(public_id=current_user.public_id).first().id, symbol=data['symbol'].upper(), price_at_purchase=current_price, quantity=data['quantity'])
+        current_stock = Stock.query.filter_by(symbol=data['symbol'].upper()).first()
         if current_stock:
             current_stock.quantity += data['quantity']
         else:
@@ -234,7 +235,7 @@ def add_stock(current_user, symbol):
         db.session.commit()
     except:
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
-    return jsonify({'message': f'Successfully purchased {data["quantity"]} {symbol.upper()}.'})
+    return jsonify({'message': f'Successfully purchased {data["quantity"]} {data["symbol"].upper()}.'})
 
 @app.route('/stock/delete/<symbol>/<quantity>')
 @require_token
