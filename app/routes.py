@@ -213,7 +213,7 @@ def get_user_stocks(current_user):
         for stock in stocks:
             data = {}
             data['symbol'] = stock.symbol
-            data['price_at_purchase'] = stock.price_at_purchase
+            data['price'] = round(get_hist_data(yf.Ticker(stock.symbol.upper()), interval="1d", period="1d")['Close'][-1], 2)
             data['quantity'] = stock.quantity
             stock_list.append(data)
         return jsonify(stock_list)
@@ -247,30 +247,30 @@ def buy_stock(current_user):
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
     return jsonify({'message': f'Successfully purchased {data["quantity"]} {data["symbol"].upper()}.'})
 
-@app.route('/stock/delete/<symbol>/<quantity>')
+@app.route('/stock/delete', methods=['POST'])
 @require_token
-def sell_stock(current_user, symbol, quantity):
+def sell_stock(current_user):
+    data = request.get_json()
     try:
-        ticker = yf.Ticker(symbol.upper())
+        ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
         return jsonify({'message': 'Invalid input.'}), 403
     try:
-        quantity = int(quantity)
-        stock = Stock.query.filter_by(user_id=User.query.filter_by(public_id=current_user.public_id).first().id, symbol=symbol.upper()).first()
+        stock = Stock.query.filter_by(user_id=User.query.filter_by(public_id=current_user.public_id).first().id, symbol=data['symbol'].upper()).first()
         if not stock:
             return jsonify({'message': 'Stock not found!'}), 404
-        if stock.quantity < quantity:
-            return jsonify({'message': f'You have less than {quantity} of that stock!'}), 400
-        stock.quantity -= quantity 
+        if stock.quantity < stock['quantity']:
+            return jsonify({'message': f'You have less than {stock["quantity"]} of that stock!'}), 400
+        stock.quantity -= stock['quantity'] 
         if stock.quantity == 0: 
             db.session.delete(stock)
-        current_user.balance += current_price * quantity
+        current_user.balance += current_price * stock['quantity']
         current_user.balance = round(current_user.balance, 2) # correcting potential floating point imprecision 
         db.session.commit()
     except:
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
-    return jsonify({'message': f'Successfully sold {quantity} {symbol.upper()}.'})
+    return jsonify({'message': f'Successfully sold {stock["quantity"]} {data["symbol"].upper()}.'})
 
 @app.route('/stock/reset')
 @require_token 
