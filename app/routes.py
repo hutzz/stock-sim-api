@@ -247,7 +247,7 @@ def buy_stock(current_user):
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
     return jsonify({'message': f'Successfully purchased {data["quantity"]} {data["symbol"].upper()}.'})
 
-@app.route('/stock/delete', methods=['POST'])
+@app.route('/stock/sell', methods=['POST'])
 @require_token
 def sell_stock(current_user):
     data = request.get_json()
@@ -260,17 +260,18 @@ def sell_stock(current_user):
         stock = Stock.query.filter_by(user_id=User.query.filter_by(public_id=current_user.public_id).first().id, symbol=data['symbol'].upper()).first()
         if not stock:
             return jsonify({'message': 'Stock not found!'}), 404
-        if stock.quantity < stock['quantity']:
-            return jsonify({'message': f'You have less than {stock["quantity"]} of that stock!'}), 400
-        stock.quantity -= stock['quantity'] 
+        if stock.quantity < data['quantity']:
+            return jsonify({'message': f'You have less than {data["quantity"]} of that stock!'}), 400
+        stock.quantity -= data['quantity'] 
         if stock.quantity == 0: 
             db.session.delete(stock)
-        current_user.balance += current_price * stock['quantity']
+        current_user.balance += current_price * data['quantity']
         current_user.balance = round(current_user.balance, 2) # correcting potential floating point imprecision 
         db.session.commit()
-    except:
+    except Exception as e:
+        print(e)
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
-    return jsonify({'message': f'Successfully sold {stock["quantity"]} {data["symbol"].upper()}.'})
+    return jsonify({'message': f'Successfully sold {data["quantity"]} {data["symbol"].upper()}.'})
 
 @app.route('/stock/reset')
 @require_token 
