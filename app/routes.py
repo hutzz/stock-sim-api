@@ -233,7 +233,7 @@ def buy_stock(current_user):
     try:
         data['quantity'] = int(data['quantity'])
         stock = Stock(user_id=User.query.filter_by(public_id=current_user.public_id).first().id, symbol=data['symbol'].upper(), price_at_purchase=current_price, quantity=data['quantity'])
-        current_stock = Stock.query.filter_by(symbol=data['symbol'].upper()).first()
+        current_stock = Stock.query.filter_by(user_id=User.query.filter_by(public_id=current_user.public_id).first().id, symbol=data['symbol'].upper()).first()
         if current_stock:
             current_stock.quantity += data['quantity']
         else:
