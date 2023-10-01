@@ -228,6 +228,8 @@ def buy_stock(current_user):
     try:
         if data['quantity'] < 1:
             return jsonify({'message': 'Quantity must be at least 1.'}), 400
+        if not str(data['quantity']).isdigit():
+            return jsonify({'message': 'Quantity must be an integer.'}), 400
         ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
@@ -256,6 +258,8 @@ def sell_stock(current_user):
     try:
         if data['quantity'] < 1:
             return jsonify({'message': 'Quantity must be at least 1.'}), 400
+        if not str(data['quantity']).isdigit():
+            return jsonify({'message': 'Quantity must be an integer.'}), 400
         ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
