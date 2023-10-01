@@ -226,6 +226,8 @@ def get_user_stocks(current_user):
 def buy_stock(current_user):
     data = request.get_json()
     try:
+        if data['quantity'] < 1:
+            return jsonify({'message': 'Quantity must be at least 1.'})
         ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
@@ -252,6 +254,8 @@ def buy_stock(current_user):
 def sell_stock(current_user):
     data = request.get_json()
     try:
+        if data['quantity'] < 1:
+            return jsonify({'message': 'Quantity must be at least 1.'})
         ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
