@@ -208,7 +208,7 @@ def get_user_stocks(current_user):
     try:
         stocks = Stock.query.filter_by(user_id=User.query.filter_by(public_id=current_user.public_id).first().id).all()
         if not stocks:
-            return jsonify({'message': 'User has no stocks!'})
+            return jsonify({'message': 'User has no stocks!'}), 400
         stock_list = []
         for stock in stocks:
             data = {}
@@ -227,7 +227,7 @@ def buy_stock(current_user):
     data = request.get_json()
     try:
         if data['quantity'] < 1:
-            return jsonify({'message': 'Quantity must be at least 1.'})
+            return jsonify({'message': 'Quantity must be at least 1.'}), 400
         ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
@@ -255,7 +255,7 @@ def sell_stock(current_user):
     data = request.get_json()
     try:
         if data['quantity'] < 1:
-            return jsonify({'message': 'Quantity must be at least 1.'})
+            return jsonify({'message': 'Quantity must be at least 1.'}), 400
         ticker = yf.Ticker(data['symbol'].upper())
         current_price = round(get_hist_data(ticker, interval="1d", period="1d")['Close'][-1], 2)
     except:
@@ -283,7 +283,7 @@ def reset_self(current_user):
     try:
         stocks = Stock.query.filter_by(user_id=User.query.filter_by(public_id=current_user.public_id).first().id).all()
         if not stocks:
-            return jsonify({'message': 'User has no stocks!'})
+            return jsonify({'message': 'User has no stocks!'}), 400
         current_user.balance = 10000.00
         for stock in stocks:
             db.session.delete(stock)
