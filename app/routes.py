@@ -281,6 +281,20 @@ def sell_stock(current_user):
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
     return jsonify({'message': f'Successfully sold {data["quantity"]} {data["symbol"].upper()}.'})
 
+@app.route('/expiry', methods=['POST'])
+def get_expiry_time():
+    data = request.get_json()
+    token = data['token']
+    print(token)
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 400
+    try:
+        decoded_token = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'], options={"verify_signature": False},)
+        expiry_time = decoded_token['exp']
+        return jsonify({'expiry_time': expiry_time})
+    except Exception:
+        return jsonify({'error': 'Invalid token'}), 401
+        
 @app.route('/stock/reset')
 @require_token 
 def reset_self(current_user):
