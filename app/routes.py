@@ -156,6 +156,12 @@ def register():
             return jsonify({'message': 'Invalid username. Check for any special characters that may be present.'}), 401
         if not data['password'] or re.search(r"[%\\\?\"\'~/\$\*\{\}\s]", data['password']) or len(data["password"]) < 8 or not data['password'].isascii():
             return jsonify({'message': 'Invalid password. Check for any special characters that may be present.'}), 401
+        email = User.query.filter_by(email=data['email']).first()
+        user = User.query.filter_by(username=data['username']).first()
+        if email:
+            return jsonify({'message': 'User with this email already exists.'}), 401
+        if user:
+            return jsonify({'message': 'Username is taken.'}), 401
         hashed_pw = generate_password_hash(data['password'], method='sha256')
         user = User(public_id=str(uuid.uuid4()), username=data['username'], email=data['email'], password=hashed_pw, balance=10000.00, admin=False)
         db.session.add(user)
