@@ -251,7 +251,7 @@ def buy_stock(current_user):
         current_user.balance -= current_price * data['quantity']
         current_user.balance = round(current_user.balance, 2) # correcting potential floating point imprecision 
         if current_user.balance < 0:
-            return jsonify({'message': 'Insufficient funds!'})
+            return jsonify({'message': 'Insufficient funds!'}), 400
         db.session.commit()
     except:
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
