@@ -222,8 +222,12 @@ def get_user_stocks(current_user):
         stock_list = []
         for stock in stocks:
             data = {}
+            # One history call per stock; 5d gives us today's price plus the previous close
+            # so the dashboard can show a day-over-day trend without extra yfinance requests.
+            closes = get_hist_data(yf.Ticker(stock.symbol.upper()), interval="1d", period="5d")['Close']
             data['symbol'] = stock.symbol
-            data['price'] = round(get_hist_data(yf.Ticker(stock.symbol.upper()), interval="1d", period="1d")['Close'][-1], 2)
+            data['price'] = round(closes[-1], 2)
+            data['previous_price'] = round(closes[-2], 2) if len(closes) > 1 else None
             data['quantity'] = stock.quantity
             stock_list.append(data)
         return jsonify(stock_list)
