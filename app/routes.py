@@ -57,7 +57,6 @@ def get_users(current_user):
             data['public_id'] = user.public_id
             data['email'] = user.email
             data['username'] = user.username
-            data['password'] = user.password
             data['balance'] = user.balance
             data['admin'] = user.admin
             user_list.append(data)
@@ -78,7 +77,6 @@ def get_user(current_user, public_id):
         data = {}
         data['public_id'] = user.public_id
         data['username'] = user.username 
-        data['password'] = user.password 
         data['balance'] = user.balance
         data['admin'] = user.admin 
         return jsonify(data)
@@ -103,7 +101,7 @@ def create_user(current_user):
         if not current_user.admin:
             return jsonify({'message': "Insufficient permissions."}), 401
         data = request.get_json()
-        hashed_pw = generate_password_hash(data['password'], method='sha256')
+        hashed_pw = generate_password_hash(data['password'])
         user = User(public_id=str(uuid.uuid4()), username=data['username'], password=hashed_pw, admin=data['admin'])
         db.session.add(user)
         db.session.commit()
@@ -137,9 +135,14 @@ def login():
         user = User.query.filter_by(username=auth.username).first()
         if not user:
             return jsonify({'message': 'User not found.'}), 404
-        if check_password_hash(user.password, auth.password):
-            token = jwt.encode({'public_id': user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=15)}, app.config['SECRET_KEY'], algorithm='HS256')
-            refresh = jwt.encode({'public_id': user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=15)}, app.config['SECRET_KEY'], algorithm='HS256')
+        try:
+            password_ok = check_password_hash(user.password, auth.password)
+        except ValueError:
+            # Stored hash uses a format this Werkzeug version cannot verify.
+            password_ok = False
+        if password_ok:
+            token = jwt.encode({'public_id': user.public_id, 'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=15)}, app.config['SECRET_KEY'], algorithm='HS256')
+            refresh = jwt.encode({'public_id': user.public_id, 'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=15)}, app.config['SECRET_KEY'], algorithm='HS256')
             return jsonify({'token': token, 'refresh': refresh})
     except Exception as e:
         print(e)
@@ -162,7 +165,7 @@ def register():
             return jsonify({'message': 'User with this email already exists.'}), 401
         if user:
             return jsonify({'message': 'Username is taken.'}), 401
-        hashed_pw = generate_password_hash(data['password'], method='sha256')
+        hashed_pw = generate_password_hash(data['password'])
         user = User(public_id=str(uuid.uuid4()), username=data['username'], email=data['email'], password=hashed_pw, balance=10000.00, admin=False)
         db.session.add(user)
     except Exception as e:
@@ -187,7 +190,8 @@ def refresh_token(current_user):
             return jsonify({'message': 'Invalid refresh token.'}), 401
         if not current_user:
             return jsonify({'message': 'User not found.'}), 404
-        return jsonify({'token': jwt.encode({'public_id': current_user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=15)}, app.config['SECRET_KEY'], algorithm='HS256'), 'refresh': jwt.encode({'public_id': current_user.public_id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(days=15)}, app.config['SECRET_KEY'], algorithm='HS256')})
+        now = datetime.datetime.now(datetime.UTC)
+        return jsonify({'token': jwt.encode({'public_id': current_user.public_id, 'exp': now + datetime.timedelta(minutes=15)}, app.config['SECRET_KEY'], algorithm='HS256'), 'refresh': jwt.encode({'public_id': current_user.public_id, 'exp': now + datetime.timedelta(days=15)}, app.config['SECRET_KEY'], algorithm='HS256')})
     except Exception as e:
         print(e)
         return jsonify({'message': "An error occurred."}), 500

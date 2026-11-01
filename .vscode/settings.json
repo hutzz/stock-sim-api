@@ -1,3 +1,4 @@
 {
-	"sqltools.connections": []
+	"sqltools.connections": [],
+	"python.terminal.useEnvFile": true
 }
