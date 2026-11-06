@@ -1,13 +1,23 @@
 from index import app, db
 from flask import request, jsonify
-from app.models import User, Stock, Transaction, STARTING_BALANCE_CENTS
+from app.models import (
+    User,
+    Stock,
+    Transaction,
+    PortfolioSnapshot,
+    STARTING_BALANCE_CENTS,
+    utcnow_naive,
+    market_today,
+)
 from app.prices import (
     get_hist_data,
-    get_closing_prices,
+    get_dated_closing_prices,
     to_cents,
     InvalidPriceRequest,
     PriceUnavailable,
 )
+from app import sectors as sector_lookup
+from app.yahoo_rate_limit import budget
 import yfinance as yf
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import func
@@ -62,6 +72,44 @@ def cents_to_dollars(cents):
     if cents is None:
         return None
     return float(Decimal(cents).scaleb(-2).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+
+def _as_date(value):
+    """Accept the ISO string Yahoo gives us or an already-parsed date."""
+    if isinstance(value, datetime.date):
+        return value
+    return datetime.datetime.strptime(value, '%Y-%m-%d').date()
+
+
+def record_portfolio_snapshot(user, market_value_cents, quote_date=None):
+    """Store a portfolio roll-up against the trading day its prices belong to.
+
+    The trend chart plots stored values only. Recomputing history from live quotes
+    would let today's prices rewrite what yesterday's dashboard showed.
+
+    ``quote_date`` is the session the freshest close came from, not the clock on the
+    wall: Yahoo has no settled bar for an in-progress session, weekends or holidays, so
+    stamping the snapshot with "today" invents a point whose value is just the previous
+    close - a flat duplicate that reads as a real day. A snapshot is therefore filed
+    under its own data date, and a date older than the newest stored point is skipped:
+    it can add nothing to the chart, and writing cash into an older row would rewrite
+    history. Returns the date recorded, or None when the visit added nothing.
+    """
+    snapshot_date = _as_date(quote_date) if quote_date is not None else market_today()
+    newest_date = db.session.query(
+        func.max(PortfolioSnapshot.snapshot_date)
+    ).filter(PortfolioSnapshot.user_id == user.id).scalar()
+    if newest_date is not None and snapshot_date < newest_date:
+        return None
+    snapshot = PortfolioSnapshot.query.filter_by(user_id=user.id, snapshot_date=snapshot_date).first()
+    if snapshot is None:
+        snapshot = PortfolioSnapshot(user_id=user.id, snapshot_date=snapshot_date)
+        db.session.add(snapshot)
+    snapshot.cash_cents = user.balance_cents
+    snapshot.market_value_cents = market_value_cents
+    snapshot.total_value_cents = user.balance_cents + market_value_cents
+    snapshot.updated_at = utcnow_naive()
+    return snapshot_date
 
 
 def require_token(function):
@@ -263,6 +311,7 @@ def refresh_token(current_user):
         return jsonify({'message': "An error occurred."}), 500
 
 @app.route('/stock/<symbol>', methods=['POST'])
+@budget
 def get_stock_data(symbol):
     try:
         symbol = parse_symbol(symbol)
@@ -285,6 +334,7 @@ def get_stock_data(symbol):
 
 @app.route('/stock/get')
 @require_token 
+@budget
 def get_user_stocks(current_user):
     try:
         stocks = Stock.query.filter_by(user_id=current_user.id).all()
@@ -293,19 +343,28 @@ def get_user_stocks(current_user):
         stock_list = []
         for stock in stocks:
             data = {}
-            # One history call per stock; 5d gives us today's price plus the previous close
-            # so the dashboard can show a day-over-day trend without extra yfinance requests.
+            # One history call per stock; 5d gives us the latest close plus the previous
+            # close so the dashboard can show a day-over-day trend without extra lookups.
             try:
-                closes = get_closing_prices(stock.symbol, count=2)
-                price_cents = closes[-1]
-                previous_price_cents = closes[-2] if len(closes) > 1 else None
+                closes = get_dated_closing_prices(stock.symbol, count=2)
+                price_date, price_cents = closes[-1]
+                previous_date, previous_price_cents = closes[-2] if len(closes) > 1 else (None, None)
             except PriceUnavailable:
-                # A delisted symbol must not fail the whole portfolio request.
-                price_cents, previous_price_cents = None, None
+                # A delisted symbol must not fail the whole portfolio request. It has no
+                # price and no session to attribute one to, which the caller must show as
+                # "no quote" rather than as a value of its own.
+                price_date, price_cents = None, None
+                previous_date, previous_price_cents = None, None
             market_value_cents = None if price_cents is None else price_cents * stock.quantity
             data['symbol'] = stock.symbol
             data['price'] = cents_to_dollars(price_cents)
+            # Every price we report belongs to a specific settled session. Yahoo has no
+            # settled bar for an in-progress session, weekends or holidays, so the latest
+            # close is routinely from an earlier day; showing its date stops a Friday
+            # close being read as today's.
+            data['price_date'] = price_date
             data['previous_price'] = cents_to_dollars(previous_price_cents)
+            data['previous_price_date'] = previous_date
             data['quantity'] = stock.quantity
             data['avg_cost'] = cents_to_dollars(stock.avg_cost_cents)
             data['market_value'] = cents_to_dollars(market_value_cents)
@@ -319,29 +378,46 @@ def get_user_stocks(current_user):
 
 @app.route('/stock/summary')
 @require_token
+@budget
 def get_portfolio_summary(current_user):
     """Cash, market value and P&L rolled up from positions plus the trade ledger.
 
     Realized P&L only exists because every fill is recorded in the transaction
     table; unrealized P&L compares current market value against cost basis.
+    The same roll-up is stored as a snapshot so the dashboard trend chart has
+    history to draw, filed under the trading day the quotes came from.
     """
     try:
         positions = Stock.query.filter_by(user_id=current_user.id).all()
         market_value_cents = 0
         cost_basis_cents = 0
+        quote_dates = []
+        unquoted_symbols = []
         for position in positions:
             cost_basis_cents += position.cost_basis_cents
             try:
-                price_cents = get_closing_prices(position.symbol, count=1)[0]
+                quote_date, price_cents = get_dated_closing_prices(position.symbol, count=1)[0]
             except PriceUnavailable:
                 # A delisted holding has no quote; fall back to what it cost so the
-                # portfolio total stays computable instead of failing outright.
+                # portfolio total stays computable instead of failing outright. It
+                # carries no market date, so it cannot date the roll-up either, and
+                # the caller must be told this part of the total is not a market value.
                 price_cents = position.avg_cost_cents
+                unquoted_symbols.append(position.symbol)
+            else:
+                quote_dates.append(quote_date)
             market_value_cents += price_cents * position.quantity
         realized_pnl_cents = db.session.query(
             func.coalesce(func.sum(Transaction.realized_pnl_cents), 0)
         ).filter(Transaction.user_id == current_user.id).scalar()
+        # The freshest close in the book decides which session this roll-up describes.
+        snapshot_date = max(quote_dates) if quote_dates else market_today()
+        record_portfolio_snapshot(current_user, market_value_cents, snapshot_date)
+        # The roll-up is read-only apart from the snapshot row, so committing here
+        # persists only the chart history.
+        db.session.commit()
     except Exception as e:
+        db.session.rollback()
         app.logger.error(e)
         return jsonify({'message': "An error occurred."}), 500
     return jsonify({
@@ -354,17 +430,114 @@ def get_portfolio_summary(current_user):
         'total_value': cents_to_dollars(current_user.balance_cents + market_value_cents),
         'total_return': cents_to_dollars(
             current_user.balance_cents + market_value_cents - STARTING_BALANCE_CENTS),
+        'quote_date': snapshot_date,
+        # Positions priced at their average cost because Yahoo has no close for them.
+        # Their share of the total is carried at cost, not marked to a market.
+        'unquoted_symbols': unquoted_symbols,
     })
+
+
+@app.route('/stock/quote')
+@require_token
+@budget
+def get_stock_quote(current_user):
+    """The price a trade on this symbol would fill at, and the session it comes from.
+
+    The trade forms quote an order before submitting it so the amount about to move is
+    visible up front. A fill always uses the latest settled close, which during an
+    in-progress session is an earlier day's, so the date travels with the number.
+    """
+    try:
+        symbol = parse_symbol(request.args.get('symbol'))
+        quote_date, price_cents = get_dated_closing_prices(symbol, count=1)[0]
+    except InvalidInput as e:
+        return jsonify({'message': str(e)}), 400
+    except PriceUnavailable as e:
+        return jsonify({'message': str(e)}), 404
+    except Exception as e:
+        app.logger.error(e)
+        return jsonify({'message': "An error occurred."}), 500
+    return jsonify({
+        'symbol': symbol,
+        'price': cents_to_dollars(price_cents),
+        'price_date': quote_date,
+    })
+
+MAX_SECTOR_SYMBOLS = 40
+
+
+@app.route('/stock/sectors')
+@require_token
+def get_sector_labels(current_user):
+    """Sector label for each requested symbol, for the dashboard industry charts.
+
+    Symbols come from the query string (``?symbols=AAPL,MSFT``). Labels are served from
+    a persistent cache; only uncached symbols cost a Yahoo call, and those are spaced
+    and capped so the app cannot get its IP blocked. A symbol Yahoo does not know
+    returns ``sector: null``, which the frontend renders as Unclassified.
+    """
+    raw = request.args.get('symbols', '')
+    symbols = []
+    for item in raw.split(','):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            symbols.append(parse_symbol(item))
+        except InvalidInput:
+            return jsonify({'message': f'Invalid symbol: {item}'}), 400
+    if len(symbols) > MAX_SECTOR_SYMBOLS:
+        return jsonify({
+            'message': f'Request at most {MAX_SECTOR_SYMBOLS} symbols per call.'
+        }), 400
+
+    try:
+        resolved = sector_lookup.get_sectors(symbols)
+    except Exception as e:
+        app.logger.error(e)
+        return jsonify({'message': "An error occurred."}), 500
+    return jsonify({
+        'sectors': [{'symbol': symbol, 'sector': resolved.get(symbol)} for symbol in symbols],
+        'unclassified_label': 'Unclassified',
+    })
+
+
+@app.route('/stock/history')
+@require_token
+def get_portfolio_history(current_user):
+    """Stored daily portfolio totals, oldest first, for the dashboard trend chart."""
+    try:
+        snapshots = (PortfolioSnapshot.query.filter_by(user_id=current_user.id)
+                     .order_by(PortfolioSnapshot.snapshot_date.asc())
+                     .limit(365)
+                     .all())
+    except Exception as e:
+        app.logger.error(e)
+        return jsonify({'message': "An error occurred."}), 500
+    return jsonify([
+        {
+            'date': snapshot.snapshot_date.strftime('%Y-%m-%d'),
+            'cash': cents_to_dollars(snapshot.cash_cents),
+            'market_value': cents_to_dollars(snapshot.market_value_cents),
+            'total_value': cents_to_dollars(snapshot.total_value_cents),
+        }
+        for snapshot in snapshots
+    ])
+
 
 @app.route('/stock/buy', methods=['POST'])
 @require_token
+@budget
 def buy_stock(current_user):
     try:
         data = json_body()
         symbol = parse_symbol(data.get('symbol'))
         quantity = parse_quantity(data.get('quantity'))
         # Price lookup happens before any balance check so a bad symbol reports as such.
-        price_cents = get_closing_prices(symbol)[0]
+        # The fill is the latest settled close, tagged with its session: during an
+        # in-progress session that close belongs to an earlier day, and the confirmation
+        # has to say so rather than implying the order filled at today's price.
+        quote_date, price_cents = get_dated_closing_prices(symbol, count=1)[0]
     except InvalidInput as e:
         return jsonify({'message': str(e)}), 400
     except InvalidPriceRequest as e:
@@ -394,7 +567,12 @@ def buy_stock(current_user):
         app.logger.error(e)
         db.session.rollback()
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
-    return jsonify({'message': f'Successfully purchased {quantity} {symbol}.', 'balance': current_user.balance})
+    return jsonify({
+        'message': f'Successfully purchased {quantity} {symbol}.',
+        'balance': current_user.balance,
+        'filled_price': cents_to_dollars(price_cents),
+        'fill_date': quote_date,
+    })
 
 @app.route('/stock/sell', methods=['POST'])
 @require_token
@@ -403,7 +581,8 @@ def sell_stock(current_user):
         data = json_body()
         symbol = parse_symbol(data.get('symbol'))
         quantity = parse_quantity(data.get('quantity'))
-        price_cents = get_closing_prices(symbol)[0]
+        # Same fill rule as a buy: the latest settled close, tagged with its session.
+        quote_date, price_cents = get_dated_closing_prices(symbol, count=1)[0]
     except InvalidInput as e:
         return jsonify({'message': str(e)}), 400
     except InvalidPriceRequest as e:
@@ -434,7 +613,12 @@ def sell_stock(current_user):
         app.logger.error(e)
         db.session.rollback()
         return jsonify({'message': 'Failed to commit changes to database.'}), 500
-    return jsonify({'message': f'Successfully sold {quantity} {symbol}.', 'balance': current_user.balance})
+    return jsonify({
+        'message': f'Successfully sold {quantity} {symbol}.',
+        'balance': current_user.balance,
+        'filled_price': cents_to_dollars(price_cents),
+        'fill_date': quote_date,
+    })
 
 @app.route('/expiry', methods=['POST'])
 def get_expiry_time():

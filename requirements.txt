@@ -6,3 +6,6 @@ PyJWT==2.15.1
 python-dotenv==1.2.4
 flask-cors==6.0.5
 yfinance==1.7.0
+# zoneinfo needs this on Windows, which has no system tz database; snapshots are
+# dated in exchange time and silently fall back to the UTC day without it.
+tzdata==2026.6
